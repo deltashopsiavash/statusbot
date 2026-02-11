@@ -8,7 +8,6 @@ SERVICE_NAME="${APP_NAME}.service"
 NODE_MAJOR="20"
 
 GREEN="\033[0;32m"; YELLOW="\033[1;33m"; RED="\033[0;31m"; NC="\033[0m"
-
 log()  { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err()  { echo -e "${RED}[-]${NC} $*"; }
@@ -27,8 +26,17 @@ install_deps() {
   log "آپدیت پکیج‌ها..."
   apt-get update -y
 
-  log "نصب پیش‌نیازها..."
-  apt-get install -y ca-certificates curl git gnupg build-essential
+  log "نصب پیش‌نیازها + ابزارهای کامپایل برای پکیج‌های Native (مثل better-sqlite3)..."
+  apt-get install -y \
+    ca-certificates \
+    curl \
+    git \
+    gnupg \
+    build-essential \
+    python3 \
+    make \
+    g++ \
+    pkg-config
 
   if ! has_cmd node; then
     log "نصب Node.js ${NODE_MAJOR}..."
@@ -40,24 +48,45 @@ install_deps() {
   else
     warn "Node.js از قبل نصب است: $(node -v)"
   fi
+
+  if ! has_cmd npm; then
+    err "npm پیدا نشد. نصب Node.js مشکل خورده."
+    exit 1
+  fi
 }
 
 ask_env() {
   echo
   echo "=== تنظیمات ربات ==="
-  read -rp "BOT_TOKEN (توکن BotFather): " BOT_TOKEN
-  while [[ -z "${BOT_TOKEN}" ]]; do
-    warn "BOT_TOKEN نمی‌تواند خالی باشد."
-    read -rp "BOT_TOKEN: " BOT_TOKEN
-  done
 
-  read -rp "ADMIN_TG_ID (آیدی عددی ادمین): " ADMIN_TG_ID
-  while [[ -z "${ADMIN_TG_ID}" || ! "${ADMIN_TG_ID}" =~ ^[0-9]+$ ]]; do
-    warn "ADMIN_TG_ID باید عدد باشد."
-    read -rp "ADMIN_TG_ID: " ADMIN_TG_ID
-  done
+  # اگر با pipe اجرا شده باشیم (curl | sudo bash)، read از STDIN می‌خونه و گیر می‌کنه.
+  # این خط باعث می‌شه ورودی رو مستقیم از ترمینال بگیره.
+  if [[ -t 0 ]]; then
+    : # stdin خودش ترمیناله
+  else
+    if [[ -e /dev/tty ]]; then
+      exec </dev/tty
+    fi
+  fi
 
-  # اختیاری: اگر خواستی پورت یا اسم سرویس رو تغییر بدی
+  # اگر کاربر خواست، می‌تونه متغیرها رو قبل از اجرا ست کنه و اسکریپت سوال نپرسه:
+  # BOT_TOKEN=... ADMIN_TG_ID=... curl ... | sudo -E bash
+  if [[ -n "${BOT_TOKEN:-}" && -n "${ADMIN_TG_ID:-}" ]]; then
+    log "BOT_TOKEN و ADMIN_TG_ID از env خوانده شد."
+  else
+    read -rp "BOT_TOKEN (توکن BotFather): " BOT_TOKEN
+    while [[ -z "${BOT_TOKEN}" ]]; do
+      warn "BOT_TOKEN نمی‌تواند خالی باشد."
+      read -rp "BOT_TOKEN: " BOT_TOKEN
+    done
+
+    read -rp "ADMIN_TG_ID (آیدی عددی ادمین): " ADMIN_TG_ID
+    while [[ -z "${ADMIN_TG_ID}" || ! "${ADMIN_TG_ID}" =~ ^[0-9]+$ ]]; do
+      warn "ADMIN_TG_ID باید عدد باشد."
+      read -rp "ADMIN_TG_ID: " ADMIN_TG_ID
+    done
+  fi
+
   read -rp "ENV (پیش‌فرض: production) [Enter]: " NODE_ENV
   NODE_ENV="${NODE_ENV:-production}"
 }
@@ -69,7 +98,12 @@ clone_or_update() {
   if [[ -d "${INSTALL_DIR}/.git" ]]; then
     warn "ریپو از قبل وجود دارد، آپدیت می‌کنم..."
     git -C "${INSTALL_DIR}" fetch --all --prune
-    git -C "${INSTALL_DIR}" reset --hard origin/main || git -C "${INSTALL_DIR}" reset --hard origin/master
+
+    if git -C "${INSTALL_DIR}" show-ref --verify --quiet refs/remotes/origin/main; then
+      git -C "${INSTALL_DIR}" reset --hard origin/main
+    else
+      git -C "${INSTALL_DIR}" reset --hard origin/master
+    fi
   else
     log "کلون کردن ریپو..."
     git clone "${REPO_URL}" "${INSTALL_DIR}"
@@ -77,10 +111,11 @@ clone_or_update() {
 }
 
 setup_env_file() {
-  # مسیر پروژه نود داخل ریپو
   local APP_DIR="${INSTALL_DIR}/3xui-telegram-bot"
+
   if [[ ! -f "${APP_DIR}/package.json" ]]; then
     err "package.json پیدا نشد. مطمئن شو پروژه داخل مسیر 3xui-telegram-bot/ است."
+    err "مسیر مورد انتظار: ${APP_DIR}/package.json"
     exit 1
   fi
 
@@ -99,9 +134,13 @@ install_node_modules() {
   log "نصب پکیج‌های npm..."
   cd "${APP_DIR}"
 
-  # اگر package-lock هست، بهتره ci بزنیم
+  # برای سرور بهتره devDependencies نصب نشه
+  # اول npm ci (اگر package-lock هست)؛ اگر شکست خورد fallback به npm install
   if [[ -f package-lock.json ]]; then
-    npm ci --omit=dev
+    if ! npm ci --omit=dev; then
+      warn "npm ci شکست خورد؛ fallback به npm install..."
+      npm install --omit=dev
+    fi
   else
     npm install --omit=dev
   fi
@@ -158,7 +197,9 @@ print_done() {
   echo "  مشاهده لاگ‌ها:   journalctl -u ${SERVICE_NAME} -f"
   echo "  ری‌استارت:       systemctl restart ${SERVICE_NAME}"
   echo "  توقف:            systemctl stop ${SERVICE_NAME}"
-  echo "  آپدیت ریپو:      cd ${INSTALL_DIR} && git pull && systemctl restart ${SERVICE_NAME}"
+  echo
+  echo "مسیر نصب: ${INSTALL_DIR}/3xui-telegram-bot"
+  echo "فایل env: ${INSTALL_DIR}/3xui-telegram-bot/.env"
 }
 
 main() {
