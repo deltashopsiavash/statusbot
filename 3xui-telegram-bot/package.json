@@ -1,0 +1,19 @@
+{
+  "name": "3xui-telegram-service-status-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot to show client service status from 3x-ui (x-ui/3x-ui) panel via API",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "axios-cookiejar-support": "^4.0.7",
+    "better-sqlite3": "^9.4.3",
+    "dotenv": "^16.4.5",
+    "telegraf": "^4.16.3",
+    "tough-cookie": "^4.1.3"
+  }
+}
