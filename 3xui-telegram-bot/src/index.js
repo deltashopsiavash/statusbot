@@ -30,7 +30,6 @@ const bot = new Telegraf(BOT_TOKEN);
 // ----- Simple state machine (per chat) -----
 const state = new Map(); // chatId -> { step, data }
 // Keep the last successful lookup per chat for the "refresh" button.
-const lastLookup = new Map(); // chatId -> { parsed }
 const lastLookup = new Map(); // chatId -> { rawText, parsed }
 
 function isAdmin(ctx) {
